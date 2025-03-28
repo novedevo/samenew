@@ -4,24 +4,11 @@ use chrono::{DateTime, Utc};
 
 pub struct SineWave {
     hz: f32,
-    // sample_rate: usize,
-    // samples: usize,
     seconds: f32,
     cycles: f32,
 }
 
 impl SineWave {
-    // fn new_from_sample_count(hz: f32, sample_rate: usize, samples: usize) -> Self {
-    //     let seconds = samples as f32 / sample_rate as f32;
-    //     let cycles = hz * seconds;
-    //     Self {
-    //         hz,
-    //         sample_rate,
-    //         samples,
-    //         seconds,
-    //         cycles,
-    //     }
-    // }
     fn new_from_seconds(hz: f32, seconds: f32) -> Self {
         // let samples = sample_rate as f32 * seconds;
         let cycles = hz * seconds;
