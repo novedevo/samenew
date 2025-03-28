@@ -64,9 +64,10 @@ impl SineWave {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 enum AfskBit {
     Mark,
+    #[default]
     Space,
 }
 
@@ -86,7 +87,7 @@ impl From<AfskBit> for SineWave {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 struct AfskByte {
     bits: [AfskBit; 8],
 }
@@ -127,7 +128,7 @@ impl From<OriginatorCode> for [AfskByte; 3] {
     }
 }
 
-fn calibrator() -> [AfskByte; 16] {
+fn preamble() -> [AfskByte; 16] {
     [0xAB.into(); 16]
 }
 
@@ -140,9 +141,9 @@ fn header(
     callsign: [u8; 8],
 ) -> Vec<AfskByte> {
     let formatted_datetime = time_of_issue.format("%j%H%M").to_string();
-    let stripped_callsign = callsign.map(|char| if char == b'-' {b'\\'} else {char});
+    let stripped_callsign = callsign.map(|char| if char == b'-' { b'\\' } else { char });
 
-    let mut header = vec![calibrator().to_vec()];
+    let mut header = vec![preamble().to_vec()];
 
     header.push(b"ZCZC-".map(|byte| byte.into()).to_vec());
     header.push(originator_code.to_afsk_bytes().to_vec());
@@ -170,6 +171,12 @@ fn header(
     header.concat()
 }
 
+fn tail() -> [AfskByte; 20] {
+    let mut tail = [AfskByte::default(); 20];
+    tail[0..16].copy_from_slice(&preamble());
+    tail[16..].copy_from_slice(&b"NNNN".map(|byte| byte.into()));
+    tail
+}
 
 #[cfg(test)]
 mod test {
