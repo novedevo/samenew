@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 bitvec = "1.0.1"
+bon = "3.5.1"
 chrono = "0.4.40"

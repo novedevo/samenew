@@ -26,7 +26,7 @@
           cargo = toolchain;
         };
 
-      in rec {
+      in {
         # For `nix build` & `nix run`:
         defaultPackage = naersk'.buildPackage {
           src = ./.;
