@@ -1,5 +1,6 @@
-use bitvec::prelude::*;
-use std::f32::consts::PI;
+use std::{array, f32::consts::PI};
+
+use chrono::{DateTime, Utc};
 
 pub struct SineWave {
     hz: f32,
@@ -64,9 +65,15 @@ impl SineWave {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum AfskBit {
+enum AfskBit {
     Mark,
     Space,
+}
+
+impl From<bool> for AfskBit {
+    fn from(bl: bool) -> Self {
+        if bl { Self::Mark } else { Self::Space }
+    }
 }
 
 impl From<AfskBit> for SineWave {
@@ -80,25 +87,89 @@ impl From<AfskBit> for SineWave {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct AfskByte {
+struct AfskByte {
     bits: [AfskBit; 8],
 }
 
 impl From<u8> for AfskByte {
     fn from(byte: u8) -> Self {
-        let bits = byte
-            .view_bits::<Lsb0>()
-            .iter()
-            .by_vals()
-            .map(|bit| if bit { AfskBit::Mark } else { AfskBit::Space })
-            .collect::<Vec<AfskBit>>();
         AfskByte {
-            bits: [
-                bits[0], bits[1], bits[2], bits[3], bits[4], bits[5], bits[6], bits[7],
-            ],
+            bits: array::from_fn(|i| ((byte >> i) & 1 == 1).into()),
         }
     }
 }
+
+#[derive(Clone, Copy, Debug)]
+enum OriginatorCode {
+    Pep,
+    Civ,
+    Wxr,
+    Eas,
+    Ean,
+}
+
+impl OriginatorCode {
+    fn to_afsk_bytes(self) -> [AfskByte; 3] {
+        self.into()
+    }
+}
+
+impl From<OriginatorCode> for [AfskByte; 3] {
+    fn from(org: OriginatorCode) -> Self {
+        match org {
+            OriginatorCode::Pep => b"PEP",
+            OriginatorCode::Civ => b"CIV",
+            OriginatorCode::Wxr => b"WXR",
+            OriginatorCode::Eas => b"WAS",
+            OriginatorCode::Ean => b"EAN",
+        }
+        .map(|byte| byte.into())
+    }
+}
+
+fn calibrator() -> [AfskByte; 16] {
+    [0xAB.into(); 16]
+}
+
+fn header(
+    originator_code: OriginatorCode,
+    event_code: &[u8; 3],
+    location_codes: Vec<[u8; 6]>,
+    purge_time: [u8; 4],
+    time_of_issue: DateTime<Utc>,
+    callsign: [u8; 8],
+) -> Vec<AfskByte> {
+    let formatted_datetime = time_of_issue.format("%j%H%M").to_string();
+    let stripped_callsign = callsign.map(|char| if char == b'-' {b'\\'} else {char});
+
+    let mut header = vec![calibrator().to_vec()];
+
+    header.push(b"ZCZC-".map(|byte| byte.into()).to_vec());
+    header.push(originator_code.to_afsk_bytes().to_vec());
+    header.push(b"-".map(|byte| byte.into()).to_vec());
+    header.push(event_code.map(|byte| byte.into()).to_vec());
+    for location_code in location_codes {
+        header.push(b"-".map(|byte| byte.into()).to_vec());
+        header.push(location_code.map(|byte| byte.into()).to_vec());
+    }
+    header.push(b"+".map(|byte| byte.into()).to_vec());
+    header.push(purge_time.map(|byte| byte.into()).to_vec());
+    header.push(b"-".map(|byte| byte.into()).to_vec());
+    header.push(
+        formatted_datetime
+            .as_bytes()
+            .iter()
+            .cloned()
+            .map(|b| b.into())
+            .collect(),
+    );
+    header.push(b"-".map(|byte| byte.into()).to_vec());
+    header.push(stripped_callsign.map(|byte| byte.into()).to_vec());
+    header.push(b"-".map(|byte| byte.into()).to_vec());
+
+    header.concat()
+}
+
 
 #[cfg(test)]
 mod test {
