@@ -73,19 +73,19 @@ impl From<u8> for AfskByte {
 #[derive(Clone, Copy, Debug)]
 pub enum OriginatorCode {
     /// National Public Warning System (f.k.a. Primary Entry Point System).
-    /// 
+    ///
     /// Authorized national officials such as the President or Prime Minister
     Pep,
     /// Civil Authorities
-    /// 
+    ///
     /// State / provincial governments, municipal police / fire
     Civ,
-    /// National Weather Service / Environment Canada 
-    /// 
+    /// National Weather Service / Environment Canada
+    ///
     /// General weather use
     Wxr,
     /// EAS Participant
-    /// 
+    ///
     /// Broadcasters, usually test messages
     Eas,
     /// Emergency Action Notification Network
@@ -106,6 +106,10 @@ impl From<OriginatorCode> for [AfskByte; 3] {
             OriginatorCode::Civ => b"CIV",
             OriginatorCode::Wxr => b"WXR",
             OriginatorCode::Eas => b"WAS",
+            #[allow(
+                deprecated,
+                reason = "Deprecated location code still needs to be implemented."
+            )]
             OriginatorCode::Ean => b"EAN",
         }
         .map(|byte| byte.into())
@@ -120,6 +124,16 @@ fn preamble() -> [AfskByte; 16] {
 pub struct Header {
     originator_code: OriginatorCode,
     event_code: [u8; 3],
+    /// In Canada, these are Canadian Location Codes (CLC). In the US, a specific format is followed (PSSCCC)
+    ///
+    /// Maximum of 31 codes per message.
+    #[builder(with = |codes: Vec<[u8; 6]>| -> Result<_, ()> {
+        if codes.len() <= 31 {
+            Ok(codes)
+        } else {
+            Err(())
+        }
+    })]
     location_codes: Vec<[u8; 6]>,
     purge_time: [u8; 4],
     time_of_issue: DateTime<Utc>,
@@ -251,7 +265,7 @@ impl EasWarning {
             attention_signal,
         })
     }
-    pub fn construct(&self, sample_rate: usize, message: Vec<f32>) -> Vec<f32> {
+    pub fn construct(&self, sample_rate: usize, message: Option<Vec<f32>>, critical: bool) -> Vec<f32> {
         use Section::*;
         let mut sections = vec![];
 
@@ -265,11 +279,14 @@ impl EasWarning {
         sections.push(AfskBytes(header));
         sections.push(Silence(1.0));
 
-        sections.push(Tone(self.attention_signal.into()));
-        sections.push(Silence(1.0));
-
-        sections.push(Audio(message));
-        sections.push(Silence(1.0));
+        if let Some(message) = message {
+            if critical {
+                sections.push(Tone(self.attention_signal.into()));
+                sections.push(Silence(1.0));
+            }
+            sections.push(Audio(message));
+            sections.push(Silence(1.0));
+        }
 
         sections.push(AfskBytes(eom.clone()));
         sections.push(Silence(1.0));
@@ -307,7 +324,8 @@ mod test {
         let placeholder_message = MultiSineWave {
             seconds: 5.0,
             frequencies: vec![440.0],
-        };
+        }
+        .generate_samples(sample_rate);
 
         let header = Header::builder()
             .time_of_issue(Utc::now())
@@ -315,10 +333,11 @@ mod test {
             .purge_time(*b"0015")
             .callsign(*b"EC/GC/CA")
             .location_codes(vec![*b"082620"])
+            .unwrap()
             .originator_code(OriginatorCode::Civ)
             .build();
 
         let warning = EasWarning::new(header, 8.0, true).unwrap();
-        warning.construct(sample_rate, placeholder_message.generate_samples(sample_rate));
+        warning.construct(sample_rate, Some(placeholder_message), true);
     }
 }
