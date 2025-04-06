@@ -2,33 +2,19 @@ use std::{array, f32::consts::PI};
 
 use chrono::{DateTime, Utc};
 
-struct SineWave {
-    seconds: f32,
-    cycles: f32,
-}
-
-impl SineWave {
-    fn new_from_cycles_and_seconds(cycles: f32, seconds: f32) -> Self {
-        Self { seconds, cycles }
-    }
-
-    fn generate_samples(&self, sample_rate: usize) -> Vec<f32> {
-        let samples = (sample_rate as f32 * self.seconds).floor() as usize;
-        (0..samples)
-            .map(|sample_index| {
-                let way_through_cycle = sample_index as f32 / ((samples - 1) as f32 / self.cycles);
-                (way_through_cycle * 2.0 * PI).sin()
-            })
-            .collect()
-    }
-}
-
 struct MultiSineWave {
     seconds: f32,
     frequencies: Vec<f32>,
 }
 
 impl MultiSineWave {
+    fn single_from_cycles_and_seconds(cycles: f32, seconds: f32) -> Self {
+        let frequency = cycles / seconds;
+        Self {
+            seconds,
+            frequencies: vec![frequency],
+        }
+    }
     fn generate_samples(&self, sample_rate: usize) -> Vec<f32> {
         let samples = (sample_rate as f32 * self.seconds).floor() as usize;
         (0..samples)
@@ -61,13 +47,13 @@ impl From<bool> for AfskBit {
     }
 }
 
-impl From<AfskBit> for SineWave {
+impl From<AfskBit> for MultiSineWave {
     fn from(bit: AfskBit) -> Self {
         let cycles = match bit {
             AfskBit::Mark => 4.0,
             AfskBit::Space => 3.0,
         };
-        Self::new_from_cycles_and_seconds(cycles, 1.92 / 1000.0)
+        Self::single_from_cycles_and_seconds(cycles, 1.92 / 1000.0)
     }
 }
 
@@ -86,10 +72,24 @@ impl From<u8> for AfskByte {
 
 #[derive(Clone, Copy, Debug)]
 pub enum OriginatorCode {
+    /// National Public Warning System (f.k.a. Primary Entry Point System).
+    /// 
+    /// Authorized national officials such as the President or Prime Minister
     Pep,
+    /// Civil Authorities
+    /// 
+    /// State / provincial governments, municipal police / fire
     Civ,
+    /// National Weather Service / Environment Canada 
+    /// 
+    /// General weather use
     Wxr,
+    /// EAS Participant
+    /// 
+    /// Broadcasters, usually test messages
     Eas,
+    /// Emergency Action Notification Network
+    #[deprecated = "No longer used since 2010. Use Pep instead."]
     Ean,
 }
 
@@ -171,7 +171,9 @@ fn tail() -> [AfskByte; 20] {
 
 #[derive(Copy, Clone, Debug)]
 enum AttentionSignal {
+    /// used by NOAA Weather Radio, and Canadian weather radio only with event codes RMT, SVR, and TOR.
     SingleTone(f32),
+    /// used for broadcast radio / TV; all others
     CombinedTone(f32),
 }
 
@@ -222,7 +224,7 @@ impl Section {
                 .iter()
                 .flat_map(|afsk_byte| afsk_byte.bits)
                 .flat_map(|afsk_bit| {
-                    let sinewave: SineWave = afsk_bit.into();
+                    let sinewave: MultiSineWave = afsk_bit.into();
                     sinewave.generate_samples(sample_rate)
                 })
                 .collect(),
@@ -289,11 +291,34 @@ impl EasWarning {
 
 #[cfg(test)]
 mod test {
-    use crate::SineWave;
+    use chrono::Utc;
+
+    use crate::{EasWarning, Header, MultiSineWave, OriginatorCode};
 
     #[test]
     fn simple_sine() {
-        let sine = SineWave::new_from_cycles_and_seconds(1.0, 1.0);
+        let sine = MultiSineWave::single_from_cycles_and_seconds(1.0, 1.0);
         dbg!(sine.generate_samples(50));
+    }
+
+    #[test]
+    fn end_to_end() {
+        let sample_rate = 44_100;
+        let placeholder_message = MultiSineWave {
+            seconds: 5.0,
+            frequencies: vec![440.0],
+        };
+
+        let header = Header::builder()
+            .time_of_issue(Utc::now())
+            .event_code(*b"IFW")
+            .purge_time(*b"0015")
+            .callsign(*b"EC/GC/CA")
+            .location_codes(vec![*b"082620"])
+            .originator_code(OriginatorCode::Civ)
+            .build();
+
+        let warning = EasWarning::new(header, 8.0, true).unwrap();
+        warning.construct(sample_rate, placeholder_message.generate_samples(sample_rate));
     }
 }
