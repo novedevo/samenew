@@ -22,8 +22,8 @@
         toolchain = fenix.packages.${system}.stable;
 
         naersk' = naersk.lib.${system}.override {
-          rustc = toolchain;
-          cargo = toolchain;
+          rustc = toolchain.rustc;
+          cargo = toolchain.cargo;
         };
 
       in {
