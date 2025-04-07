@@ -8,19 +8,18 @@ pub struct EasWarning {
 }
 
 impl EasWarning {
-    ///`attsig_secs` must be at least `8.0`, `attsig_combined` is true for a combined tone and false for a single tone
-    /// returns `None` if `attsig_secs` is < 8.0
-    pub fn new(header: Header, attsig_secs: f32, attsig_combined: bool) -> Option<Self> {
+    /// `attsig_combined` is true for a combined tone and false for a single tone
+    pub fn new(header: Header, attsig_combined: bool) -> Self {
         let attention_signal = if !attsig_combined {
-            AttentionSignal::single(attsig_secs)
+            AttentionSignal::single(9.0)
         } else {
-            AttentionSignal::combined(attsig_secs)
-        }?;
+            AttentionSignal::combined(9.0)
+        }.unwrap();
 
-        Some(Self {
+        Self {
             header,
             attention_signal,
-        })
+        }
     }
     pub fn construct(
         &self,
@@ -39,23 +38,22 @@ impl EasWarning {
         sections.push(AfskBytes(header.clone()));
         sections.push(Silence(1.0));
         sections.push(AfskBytes(header));
-        sections.push(Silence(1.0));
 
         if let Some(message) = message {
             if critical {
+                sections.push(Silence(2.0));
                 sections.push(Tone(self.attention_signal.into()));
-                sections.push(Silence(1.0));
             }
+            sections.push(Silence(4.0));
             sections.push(Audio(message));
-            sections.push(Silence(1.0));
         }
 
+        sections.push(Silence(2.0));
         sections.push(AfskBytes(eom.clone()));
         sections.push(Silence(1.0));
         sections.push(AfskBytes(eom.clone()));
         sections.push(Silence(1.0));
         sections.push(AfskBytes(eom));
-        sections.push(Silence(1.0));
 
         Self::render(&sections, sample_rate)
     }
@@ -347,7 +345,7 @@ mod test {
             .unwrap()
             .originator_code(OriginatorCode::Civ)
             .build();
-        let warning = EasWarning::new(header, 8.0, true).unwrap();
+        let warning = EasWarning::new(header, true);
         let _audio: Vec<f32> = warning.construct(sample_rate, Some(placeholder_message), true);
     }
 }
