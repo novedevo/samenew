@@ -298,8 +298,11 @@ impl MultiSineWave {
         }
     }
     fn generate_samples(&self, sample_rate: usize) -> Vec<f32> {
-        let samples = (sample_rate as f32 * self.seconds).floor() as usize;
-        (0..samples)
+        let samples = (sample_rate as f32 * self.seconds).floor() as usize + 1;
+        // in the basic scenario where there is only one sine wave and it is exactly one cycle,
+        // the first sample will be zero and the last sample will be right before zero
+        // i.e. the next sample is assumed to be the final sample
+        let oversampled = (0..samples)
             .map(|sample_index| {
                 self.frequencies
                     .iter()
@@ -309,10 +312,11 @@ impl MultiSineWave {
                             sample_index as f32 / ((samples - 1) as f32 / cycles);
                         (way_through_cycle * 2.0 * PI).sin()
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<f32>>()
             })
             .map(|samples| samples.iter().sum::<f32>() / samples.len() as f32)
-            .collect()
+            .collect::<Vec<f32>>();
+        oversampled[..samples - 1].into()
     }
 }
 
