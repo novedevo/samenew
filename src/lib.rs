@@ -2,71 +2,131 @@ use std::{array, f32::consts::PI};
 
 use chrono::{DateTime, Utc};
 
-struct MultiSineWave {
-    seconds: f32,
-    frequencies: Vec<f32>,
+pub struct EasWarning {
+    header: Header,
+    attention_signal: AttentionSignal,
 }
 
-impl MultiSineWave {
-    fn single_from_cycles_and_seconds(cycles: f32, seconds: f32) -> Self {
-        let frequency = cycles / seconds;
-        Self {
-            seconds,
-            frequencies: vec![frequency],
-        }
+impl EasWarning {
+    ///`attsig_secs` must be at least `8.0`, `attsig_combined` is true for a combined tone and false for a single tone
+    /// returns `None` if `attsig_secs` is < 8.0
+    pub fn new(header: Header, attsig_secs: f32, attsig_combined: bool) -> Option<Self> {
+        let attention_signal = if !attsig_combined {
+            AttentionSignal::single(attsig_secs)
+        } else {
+            AttentionSignal::combined(attsig_secs)
+        }?;
+
+        Some(Self {
+            header,
+            attention_signal,
+        })
     }
-    fn generate_samples(&self, sample_rate: usize) -> Vec<f32> {
-        let samples = (sample_rate as f32 * self.seconds).floor() as usize;
-        (0..samples)
-            .map(|sample_index| {
-                self.frequencies
-                    .iter()
-                    .map(|frequency| {
-                        let cycles = frequency * self.seconds;
-                        let way_through_cycle =
-                            sample_index as f32 / ((samples - 1) as f32 / cycles);
-                        (way_through_cycle * 2.0 * PI).sin()
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .map(|samples| samples.iter().sum::<f32>() / samples.len() as f32)
+    pub fn construct(
+        &self,
+        sample_rate: usize,
+        message: Option<Vec<f32>>,
+        critical: bool,
+    ) -> Vec<f32> {
+        use Section::*;
+        let mut sections = vec![];
+
+        let header = self.header.render();
+        let eom = tail().to_vec();
+
+        sections.push(AfskBytes(header.clone()));
+        sections.push(Silence(1.0));
+        sections.push(AfskBytes(header.clone()));
+        sections.push(Silence(1.0));
+        sections.push(AfskBytes(header));
+        sections.push(Silence(1.0));
+
+        if let Some(message) = message {
+            if critical {
+                sections.push(Tone(self.attention_signal.into()));
+                sections.push(Silence(1.0));
+            }
+            sections.push(Audio(message));
+            sections.push(Silence(1.0));
+        }
+
+        sections.push(AfskBytes(eom.clone()));
+        sections.push(Silence(1.0));
+        sections.push(AfskBytes(eom.clone()));
+        sections.push(Silence(1.0));
+        sections.push(AfskBytes(eom));
+        sections.push(Silence(1.0));
+
+        Self::render(&sections, sample_rate)
+    }
+
+    fn render(sections: &[Section], sample_rate: usize) -> Vec<f32> {
+        sections
+            .iter()
+            .flat_map(|section| section.render(sample_rate))
             .collect()
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-enum AfskBit {
-    Mark,
-    #[default]
-    Space,
-}
-
-impl From<bool> for AfskBit {
-    fn from(bl: bool) -> Self {
-        if bl { Self::Mark } else { Self::Space }
-    }
-}
-
-impl From<AfskBit> for MultiSineWave {
-    fn from(bit: AfskBit) -> Self {
-        let cycles = match bit {
-            AfskBit::Mark => 4.0,
-            AfskBit::Space => 3.0,
-        };
-        Self::single_from_cycles_and_seconds(cycles, 1.92 / 1000.0)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct AfskByte {
-    bits: [AfskBit; 8],
-}
-
-impl From<u8> for AfskByte {
-    fn from(byte: u8) -> Self {
-        AfskByte {
-            bits: array::from_fn(|i| ((byte >> i) & 1 == 1).into()),
+#[derive(bon::Builder)]
+pub struct Header {
+    originator_code: OriginatorCode,
+    event_code: [u8; 3],
+    /// In Canada, these are Canadian Location Codes (CLC). In the US, a specific format is followed (PSSCCC)
+    ///
+    /// Maximum of 31 codes per message.
+    #[builder(with = |codes: Vec<[u8; 6]>| -> Result<_, ()> {
+        if codes.len() <= 31 {
+            Ok(codes)
+        } else {
+            Err(())
         }
+    })]
+    location_codes: Vec<[u8; 6]>,
+    purge_time: [u8; 4],
+    time_of_issue: DateTime<Utc>,
+    /// Must be 8 characters long.
+    /// If your callsign (e.g. `WDAF/FM`) is shorter than 8 characters, add spaces or slashes to the end.
+    /// So, `WDAF/FM ` or `WDAF/FM/`
+    ///
+    // note: I chose to request padding instead of using a variable-length
+    // field because all the real-world examples I decoded do this.
+    callsign: [u8; 8],
+}
+
+impl Header {
+    fn render(&self) -> Vec<AfskByte> {
+        let formatted_datetime = self.time_of_issue.format("%j%H%M").to_string();
+        let stripped_callsign = self
+            .callsign
+            .map(|char| if char == b'-' { b'\\' } else { char });
+
+        let mut header = vec![preamble().to_vec()];
+
+        header.push(b"ZCZC-".map(|byte| byte.into()).to_vec());
+        header.push(self.originator_code.to_afsk_bytes().to_vec());
+        header.push(b"-".map(|byte| byte.into()).to_vec());
+        header.push(self.event_code.map(|byte| byte.into()).to_vec());
+        for location_code in &self.location_codes {
+            header.push(b"-".map(|byte| byte.into()).to_vec());
+            header.push(location_code.map(|byte| byte.into()).to_vec());
+        }
+        header.push(b"+".map(|byte| byte.into()).to_vec());
+        header.push(self.purge_time.map(|byte| byte.into()).to_vec());
+        header.push(b"-".map(|byte| byte.into()).to_vec());
+        header.push(
+            formatted_datetime
+                .as_bytes()
+                .iter()
+                .cloned()
+                .map(|b| b.into())
+                .collect(),
+        );
+        header.push(b"-".map(|byte| byte.into()).to_vec());
+        header.push(stripped_callsign.map(|byte| byte.into()).to_vec());
+        header.push(b"-".map(|byte| byte.into()).to_vec());
+
+        header.concat()
     }
 }
 
@@ -114,79 +174,6 @@ impl From<OriginatorCode> for [AfskByte; 3] {
         }
         .map(|byte| byte.into())
     }
-}
-
-fn preamble() -> [AfskByte; 16] {
-    [0xAB.into(); 16]
-}
-
-#[derive(bon::Builder)]
-pub struct Header {
-    originator_code: OriginatorCode,
-    event_code: [u8; 3],
-    /// In Canada, these are Canadian Location Codes (CLC). In the US, a specific format is followed (PSSCCC)
-    ///
-    /// Maximum of 31 codes per message.
-    #[builder(with = |codes: Vec<[u8; 6]>| -> Result<_, ()> {
-        if codes.len() <= 31 {
-            Ok(codes)
-        } else {
-            Err(())
-        }
-    })]
-    location_codes: Vec<[u8; 6]>,
-    purge_time: [u8; 4],
-    time_of_issue: DateTime<Utc>,
-    /// Must be 8 characters long. 
-    /// If your callsign (e.g. `WDAF/FM`) is shorter than 8 characters, add spaces or slashes to the end.
-    /// So, `WDAF/FM ` or `WDAF/FM/`
-    /// 
-    // note: I chose to request padding instead of using a variable-length 
-    // field because all the real-world examples I decoded do this.
-    callsign: [u8; 8],
-}
-
-impl Header {
-    fn render(&self) -> Vec<AfskByte> {
-        let formatted_datetime = self.time_of_issue.format("%j%H%M").to_string();
-        let stripped_callsign = self
-            .callsign
-            .map(|char| if char == b'-' { b'\\' } else { char });
-
-        let mut header = vec![preamble().to_vec()];
-
-        header.push(b"ZCZC-".map(|byte| byte.into()).to_vec());
-        header.push(self.originator_code.to_afsk_bytes().to_vec());
-        header.push(b"-".map(|byte| byte.into()).to_vec());
-        header.push(self.event_code.map(|byte| byte.into()).to_vec());
-        for location_code in &self.location_codes {
-            header.push(b"-".map(|byte| byte.into()).to_vec());
-            header.push(location_code.map(|byte| byte.into()).to_vec());
-        }
-        header.push(b"+".map(|byte| byte.into()).to_vec());
-        header.push(self.purge_time.map(|byte| byte.into()).to_vec());
-        header.push(b"-".map(|byte| byte.into()).to_vec());
-        header.push(
-            formatted_datetime
-                .as_bytes()
-                .iter()
-                .cloned()
-                .map(|b| b.into())
-                .collect(),
-        );
-        header.push(b"-".map(|byte| byte.into()).to_vec());
-        header.push(stripped_callsign.map(|byte| byte.into()).to_vec());
-        header.push(b"-".map(|byte| byte.into()).to_vec());
-
-        header.concat()
-    }
-}
-
-fn tail() -> [AfskByte; 20] {
-    let mut tail = [AfskByte::default(); 20];
-    tail[0..16].copy_from_slice(&preamble());
-    tail[16..].copy_from_slice(&b"NNNN".map(|byte| byte.into()));
-    tail
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -252,62 +239,80 @@ impl Section {
     }
 }
 
-pub struct EasWarning {
-    header: Header,
-    attention_signal: AttentionSignal,
+fn preamble() -> [AfskByte; 16] {
+    [0xAB.into(); 16]
 }
 
-impl EasWarning {
-    ///`attsig_secs` must be at least `8.0`, `attsig_combined` is true for a combined tone and false for a single tone
-    pub fn new(header: Header, attsig_secs: f32, attsig_combined: bool) -> Option<Self> {
-        let attention_signal = if !attsig_combined {
-            AttentionSignal::single(attsig_secs)
-        } else {
-            AttentionSignal::combined(attsig_secs)
-        }?;
+fn tail() -> [AfskByte; 20] {
+    let mut tail = [AfskByte::default(); 20];
+    tail[0..16].copy_from_slice(&preamble());
+    tail[16..].copy_from_slice(&b"NNNN".map(|byte| byte.into()));
+    tail
+}
 
-        Some(Self {
-            header,
-            attention_signal,
-        })
-    }
-    pub fn construct(&self, sample_rate: usize, message: Option<Vec<f32>>, critical: bool) -> Vec<f32> {
-        use Section::*;
-        let mut sections = vec![];
+#[derive(Clone, Copy, Debug, Default)]
+struct AfskByte {
+    bits: [AfskBit; 8],
+}
 
-        let header = self.header.render();
-        let eom = tail().to_vec();
-
-        sections.push(AfskBytes(header.clone()));
-        sections.push(Silence(1.0));
-        sections.push(AfskBytes(header.clone()));
-        sections.push(Silence(1.0));
-        sections.push(AfskBytes(header));
-        sections.push(Silence(1.0));
-
-        if let Some(message) = message {
-            if critical {
-                sections.push(Tone(self.attention_signal.into()));
-                sections.push(Silence(1.0));
-            }
-            sections.push(Audio(message));
-            sections.push(Silence(1.0));
+impl From<u8> for AfskByte {
+    fn from(byte: u8) -> Self {
+        AfskByte {
+            bits: array::from_fn(|i| ((byte >> i) & 1 == 1).into()),
         }
-
-        sections.push(AfskBytes(eom.clone()));
-        sections.push(Silence(1.0));
-        sections.push(AfskBytes(eom.clone()));
-        sections.push(Silence(1.0));
-        sections.push(AfskBytes(eom));
-        sections.push(Silence(1.0));
-
-        Self::render(&sections, sample_rate)
     }
+}
 
-    fn render(sections: &[Section], sample_rate: usize) -> Vec<f32> {
-        sections
-            .iter()
-            .flat_map(|section| section.render(sample_rate))
+#[derive(Clone, Copy, Debug, Default)]
+enum AfskBit {
+    Mark,
+    #[default]
+    Space,
+}
+
+impl From<bool> for AfskBit {
+    fn from(bl: bool) -> Self {
+        if bl { Self::Mark } else { Self::Space }
+    }
+}
+
+impl From<AfskBit> for MultiSineWave {
+    fn from(bit: AfskBit) -> Self {
+        let cycles = match bit {
+            AfskBit::Mark => 4.0,
+            AfskBit::Space => 3.0,
+        };
+        Self::single_from_cycles_and_seconds(cycles, 1.92 / 1000.0)
+    }
+}
+struct MultiSineWave {
+    seconds: f32,
+    frequencies: Vec<f32>,
+}
+
+impl MultiSineWave {
+    fn single_from_cycles_and_seconds(cycles: f32, seconds: f32) -> Self {
+        let frequency = cycles / seconds;
+        Self {
+            seconds,
+            frequencies: vec![frequency],
+        }
+    }
+    fn generate_samples(&self, sample_rate: usize) -> Vec<f32> {
+        let samples = (sample_rate as f32 * self.seconds).floor() as usize;
+        (0..samples)
+            .map(|sample_index| {
+                self.frequencies
+                    .iter()
+                    .map(|frequency| {
+                        let cycles = frequency * self.seconds;
+                        let way_through_cycle =
+                            sample_index as f32 / ((samples - 1) as f32 / cycles);
+                        (way_through_cycle * 2.0 * PI).sin()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .map(|samples| samples.iter().sum::<f32>() / samples.len() as f32)
             .collect()
     }
 }
