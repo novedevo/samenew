@@ -14,7 +14,8 @@ impl EasWarning {
             AttentionSignal::single(9.0)
         } else {
             AttentionSignal::combined(9.0)
-        }.unwrap();
+        }
+        .unwrap();
 
         Self {
             header,
@@ -318,6 +319,7 @@ impl MultiSineWave {
 #[cfg(test)]
 mod test {
     use chrono::Utc;
+    use hound::{WavSpec, WavWriter};
 
     use crate::{EasWarning, Header, MultiSineWave, OriginatorCode};
 
@@ -328,7 +330,28 @@ mod test {
     }
 
     #[test]
-    fn end_to_end() {
+    fn e2e() {
+        generate_eas();
+    }
+
+    #[test]
+    #[ignore]
+    fn output_wav() {
+        let eas = generate_eas();
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate: 44100,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut writer = WavWriter::create("data/output.wav", spec).unwrap();
+        for sample in eas {
+            writer.write_sample(sample).unwrap();
+        }
+        writer.finalize().unwrap()
+    }
+
+    fn generate_eas() -> Vec<f32> {
         let sample_rate = 44_100;
         let placeholder_message = MultiSineWave {
             seconds: 5.0,
@@ -346,6 +369,6 @@ mod test {
             .originator_code(OriginatorCode::Civ)
             .build();
         let warning = EasWarning::new(header, true);
-        let _audio: Vec<f32> = warning.construct(sample_rate, Some(placeholder_message), true);
+        return warning.construct(sample_rate, Some(placeholder_message), true);
     }
 }

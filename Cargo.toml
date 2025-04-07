@@ -6,3 +6,6 @@ edition = "2024"
 [dependencies]
 bon = "3.5.1"
 chrono = "0.4.40"
+
+[dev-dependencies]
+hound = "3.5.1"
