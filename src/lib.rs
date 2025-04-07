@@ -138,9 +138,10 @@ pub struct Header {
     purge_time: [u8; 4],
     time_of_issue: DateTime<Utc>,
     /// Must be 8 characters long. 
-    /// If your callsign (e.g. WDAF/FM) is shorter than 8 characters, add spaces to the end.
+    /// If your callsign (e.g. `WDAF/FM`) is shorter than 8 characters, add spaces or slashes to the end.
+    /// So, `WDAF/FM ` or `WDAF/FM/`
     /// 
-    // note: I chose to request space-padding instead of using a variable-length 
+    // note: I chose to request padding instead of using a variable-length 
     // field because all the real-world examples I decoded do this.
     callsign: [u8; 8],
 }
@@ -341,8 +342,7 @@ mod test {
             .unwrap()
             .originator_code(OriginatorCode::Civ)
             .build();
-
         let warning = EasWarning::new(header, 8.0, true).unwrap();
-        warning.construct(sample_rate, Some(placeholder_message), true);
+        let _audio: Vec<f32> = warning.construct(sample_rate, Some(placeholder_message), true);
     }
 }
