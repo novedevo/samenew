@@ -137,6 +137,11 @@ pub struct Header {
     location_codes: Vec<[u8; 6]>,
     purge_time: [u8; 4],
     time_of_issue: DateTime<Utc>,
+    /// Must be 8 characters long. 
+    /// If your callsign (e.g. WDAF/FM) is shorter than 8 characters, add spaces to the end.
+    /// 
+    // note: I chose to request space-padding instead of using a variable-length 
+    // field because all the real-world examples I decoded do this.
     callsign: [u8; 8],
 }
 
